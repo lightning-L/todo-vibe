@@ -7,8 +7,10 @@ import {
   buildTaskTree,
   createTask,
   getAllDescendantIds,
+  getAncestorIds,
   isVisibleInView,
   matchesSearch,
+  setCompleted,
   setDueDate,
   softDelete,
   toggleComplete,
@@ -83,7 +85,25 @@ export default function Home() {
   }
 
   function handleToggleComplete(id: string) {
-    setTasks((prev) => prev.map((t) => (t.id === id ? toggleComplete(t) : t)));
+    setTasks((prev) => {
+      let next = prev.map((t) => (t.id === id ? toggleComplete(t) : t));
+      // 若当前任务变为完成，检查祖先：当某祖先的全部子任务都完成时，将该祖先也标为完成
+      const ancestorIds = getAncestorIds(id, next);
+      for (const aid of ancestorIds) {
+        const descIds = getAllDescendantIds(aid, next);
+        // 只判断「所有子任务是否都完成」，不要求父任务本身已勾选
+        const allDescendantsDone =
+          descIds.size > 0 &&
+          [...descIds].every(
+            (tid) => next.find((t) => t.id === tid)?.completed,
+          );
+        const ancestor = next.find((t) => t.id === aid);
+        if (allDescendantsDone && ancestor && !ancestor.completed) {
+          next = next.map((t) => (t.id === aid ? setCompleted(t, true) : t));
+        }
+      }
+      return next;
+    });
   }
 
   function toggleExpand(id: string) {

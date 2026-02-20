@@ -54,6 +54,18 @@ export function toggleComplete(task: Task, now: Date = new Date()): Task {
   };
 }
 
+export function setCompleted(
+  task: Task,
+  completed: boolean,
+  now: Date = new Date(),
+): Task {
+  return {
+    ...task,
+    completed,
+    updatedAt: now.toISOString(),
+  };
+}
+
 export function updateTitle(task: Task, title: string, now: Date = new Date()): Task {
   const trimmed = title.trim();
   if (!trimmed) {
@@ -203,6 +215,21 @@ export function getAllDescendantIds(
     }
   }
   collect(taskId);
+  return result;
+}
+
+/** 获取任务的祖先 ID 列表（从父到根） */
+export function getAncestorIds(taskId: TaskId, tasks: Task[]): TaskId[] {
+  const result: TaskId[] = [];
+  const task = tasks.find((t) => t.id === taskId && !t.deletedAt);
+  if (!task?.parentId) return result;
+  let currentId: TaskId | null = task.parentId;
+  while (currentId) {
+    const parent = tasks.find((t) => t.id === currentId && !t.deletedAt);
+    if (!parent) break;
+    result.push(parent.id);
+    currentId = parent.parentId;
+  }
   return result;
 }
 
