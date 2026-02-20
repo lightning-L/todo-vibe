@@ -16,12 +16,16 @@ export type TaskView = "inbox" | "today" | "upcoming" | "completed";
 
 export const TASK_STORAGE_VERSION = 1;
 
-export function createTask(title: string, now: Date = new Date()): Task {
+export function createTask(
+  title: string,
+  options?: { dueAt?: Date | null; now?: Date },
+): Task {
   const trimmed = title.trim();
   if (!trimmed) {
     throw new Error("Task title cannot be empty");
   }
 
+  const now = options?.now ?? new Date();
   const id = crypto.randomUUID();
   const timestamp = now.toISOString();
 
@@ -31,7 +35,7 @@ export function createTask(title: string, now: Date = new Date()): Task {
     id,
     title: cleanTitle || trimmed,
     completed: false,
-    dueAt: null,
+    dueAt: options?.dueAt ? options.dueAt.toISOString() : null,
     tags,
     createdAt: timestamp,
     updatedAt: timestamp,

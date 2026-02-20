@@ -1,11 +1,13 @@
  "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import * as React from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Task, TaskView } from "@/domain/task";
 import {
   createTask,
   isVisibleInView,
   matchesSearch,
+  setDueDate,
   softDelete,
   toggleComplete,
   updateTitle,
@@ -14,13 +16,23 @@ import { loadTasks, saveTasks } from "@/data/taskStorage";
 
 const DEFAULT_VIEW: TaskView = "inbox";
 
+/** 将 YYYY-MM-DD 解析为本地日期（避免被当作 UTC 午夜导致时区差一天） */
+function parseLocalDate(dateStr: string): Date {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
 export default function Home() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [view, setView] = useState<TaskView>(DEFAULT_VIEW);
   const [query, setQuery] = useState("");
   const [newTitle, setNewTitle] = useState("");
+  const [newDueDate, setNewDueDate] = useState<string>("");
+  const newDueDateInputRef = useRef<HTMLInputElement>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
+  const [editingDueId, setEditingDueId] = useState<string | null>(null);
+  const [editingDueDate, setEditingDueDate] = useState("");
 
   // 初始加载
   useEffect(() => {
@@ -46,9 +58,11 @@ export default function Home() {
     const title = newTitle.trim();
     if (!title) return;
     try {
-      const task = createTask(title);
+      const dueAt = newDueDate ? parseLocalDate(newDueDate) : null;
+      const task = createTask(title, { dueAt });
       setTasks((prev) => [task, ...prev]);
       setNewTitle("");
+      setNewDueDate("");
     } catch {
       // ignore invalid
     }
@@ -102,6 +116,53 @@ export default function Home() {
     }
   }
 
+  function openDueEditor(task: Task) {
+    setEditingDueId(task.id);
+    setEditingDueDate(task.dueAt ? task.dueAt.split("T")[0] : "");
+    // 延迟一帧，确保 input 已渲染，然后尝试打开日历选择器
+    setTimeout(() => {
+      const input = document.querySelector(
+        `input[type="date"][data-task-id="${task.id}"]`,
+      ) as HTMLInputElement | null;
+      if (input) {
+        input.focus();
+        // 如果浏览器支持 showPicker API，直接打开日历
+        if ("showPicker" in input && typeof input.showPicker === "function") {
+          try {
+            input.showPicker();
+          } catch {
+            // 某些浏览器可能不支持或需要用户手势，忽略错误
+          }
+        }
+      }
+    }, 0);
+  }
+
+  function commitDueEdit(taskId: string) {
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === taskId
+          ? setDueDate(t, editingDueDate ? parseLocalDate(editingDueDate) : null)
+          : t,
+      ),
+    );
+    setEditingDueId(null);
+    setEditingDueDate("");
+  }
+
+  /** 用指定日期值保存并关闭（日历选择后直接调用，无需再按回车） */
+  function commitDueEditWithValue(taskId: string, value: string) {
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === taskId
+          ? setDueDate(t, value ? parseLocalDate(value) : null)
+          : t,
+      ),
+    );
+    setEditingDueId(null);
+    setEditingDueDate("");
+  }
+
   const activeCount = tasks.filter((t) => !t.completed && !t.deletedAt).length;
 
   return (
@@ -122,22 +183,74 @@ export default function Home() {
         </header>
 
         <section className="mt-1 flex flex-col gap-3">
-          <div className="flex items-center gap-2 rounded-2xl bg-zinc-100/80 px-3 py-2">
-            <input
-              value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-              onKeyDown={handleKeyDownNew}
-              placeholder="添加任务，然后回车（支持 #tag）"
-              className="flex-1 border-none bg-transparent text-[15px] outline-none placeholder:text-zinc-400"
-            />
-            <button
-              type="button"
-              onClick={handleAddTask}
-              className="rounded-full bg-zinc-900 px-3 py-1 text-xs font-medium text-white shadow-sm transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
-              disabled={!newTitle.trim()}
-            >
-              添加
-            </button>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2 rounded-2xl bg-zinc-100/80 px-3 py-2">
+              <input
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                onKeyDown={handleKeyDownNew}
+                placeholder="添加任务，然后回车（支持 #tag）"
+                className="flex-1 border-none bg-transparent text-[15px] outline-none placeholder:text-zinc-400"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (newDueDateInputRef.current) {
+                    newDueDateInputRef.current.focus();
+                    if (
+                      "showPicker" in newDueDateInputRef.current &&
+                      typeof newDueDateInputRef.current.showPicker === "function"
+                    ) {
+                      try {
+                        newDueDateInputRef.current.showPicker();
+                      } catch {
+                        // 某些浏览器可能不支持或需要用户手势，忽略错误
+                      }
+                    }
+                  }
+                }}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                  newDueDate
+                    ? "bg-zinc-900 text-white shadow-sm hover:bg-zinc-800"
+                    : "bg-zinc-200 text-zinc-600 hover:bg-zinc-300"
+                }`}
+                title="选择截止日期"
+              >
+                📅
+              </button>
+              <input
+                ref={newDueDateInputRef}
+                type="date"
+                value={newDueDate}
+                onChange={(e) => setNewDueDate(e.target.value)}
+                className="sr-only"
+                aria-label="截止日期"
+                min={new Date().toISOString().split("T")[0]}
+              />
+              <button
+                type="button"
+                onClick={handleAddTask}
+                className="rounded-full bg-zinc-900 px-3 py-1 text-xs font-medium text-white shadow-sm transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
+                disabled={!newTitle.trim()}
+              >
+                添加
+              </button>
+            </div>
+            {newDueDate && (
+              <div className="flex items-center gap-2 rounded-2xl bg-zinc-50 px-3 py-2">
+                <span className="text-xs text-zinc-600">截止日期：</span>
+                <span className="text-xs font-medium text-zinc-900">
+                  {formatDueDate(parseLocalDate(newDueDate).toISOString())}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setNewDueDate("")}
+                  className="ml-auto rounded-full px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-200"
+                >
+                  清除
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -214,6 +327,43 @@ export default function Home() {
                           {task.title}
                         </p>
                         <div className="flex flex-wrap items-center gap-1.5">
+                          {editingDueId === task.id ? (
+                            <input
+                              type="date"
+                              data-task-id={task.id}
+                              value={editingDueDate}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setEditingDueDate(v);
+                                // 日历选择会一次性给出完整 YYYY-MM-DD，直接保存并关闭
+                                if (/^\d{4}-\d{2}-\d{2}$/.test(v) || v === "") {
+                                  commitDueEditWithValue(task.id, v);
+                                }
+                              }}
+                              onBlur={() => commitDueEdit(task.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  commitDueEdit(task.id);
+                                }
+                                if (e.key === "Escape") {
+                                  e.preventDefault();
+                                  setEditingDueId(null);
+                                  setEditingDueDate("");
+                                }
+                              }}
+                              autoFocus
+                              className="rounded-lg border border-zinc-200 bg-white px-2 py-0.5 text-[11px] text-zinc-700 outline-none focus:border-zinc-300"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => openDueEditor(task)}
+                              className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-[11px] text-blue-700 hover:bg-blue-200"
+                            >
+                              📅 {task.dueAt ? formatDueDate(task.dueAt) : "设置日期"}
+                            </button>
+                          )}
                           {task.tags.map((tag) => (
                             <span
                               key={tag}
@@ -265,6 +415,32 @@ function ViewChip({ label, value, current, onChange }: ViewChipProps) {
     >
       {label}
     </button>
+  );
+}
+
+function formatDueDate(isoString: string): string {
+  const datePart = isoString.split("T")[0];
+  const date = parseLocalDate(datePart);
+  const today = new Date();
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  if (isSameDay(date, today)) {
+    return "今天";
+  } else if (isSameDay(date, tomorrow)) {
+    return "明天";
+  } else {
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+    return `${month}/${day}`;
+  }
+}
+
+function isSameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
   );
 }
 
