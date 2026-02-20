@@ -20,6 +20,13 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## PWA (Progressive Web App)
+
+The app is installable as a PWA. After building and serving (e.g. `npm run build && npm run start`), you can add it to the home screen:
+
+- **iOS Safari**: Open the site in Safari → tap the Share button → **Add to Home Screen** → name it and confirm.
+- **Android Chrome**: Open the site in Chrome → tap the menu (⋮) → **Install app** or **Add to Home screen** → confirm.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
