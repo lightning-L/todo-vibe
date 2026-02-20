@@ -8,6 +8,7 @@ import {
   createTask,
   getAllDescendantIds,
   getAncestorIds,
+  getTaskDueDateKey,
   isVisibleInView,
   matchesSearch,
   setCompleted,
@@ -41,6 +42,8 @@ export default function Home() {
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
   const [addingSubtaskFor, setAddingSubtaskFor] = useState<string | null>(null);
   const [subtaskTitle, setSubtaskTitle] = useState("");
+  const [calendarFocusedDate, setCalendarFocusedDate] = useState(() => new Date());
+  const [calendarViewMode, setCalendarViewMode] = useState<"day" | "week" | "month">("month");
 
   // 初始加载
   useEffect(() => {
@@ -63,6 +66,20 @@ export default function Home() {
     );
     return buildTaskTree(filtered);
   }, [tasks, view, query]);
+
+  /** 日历视图：有 dueAt 且通过搜索过滤的任务，按日期 YYYY-MM-DD 分组 */
+  const tasksByDate = useMemo(() => {
+    const map = new Map<string, Task[]>();
+    for (const t of tasks) {
+      if (t.deletedAt) continue;
+      if (!matchesSearch(t, query)) continue;
+      const key = getTaskDueDateKey(t);
+      if (!key) continue;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(t);
+    }
+    return map;
+  }, [tasks, query]);
 
   function handleAddTask(parentId?: string | null) {
     const title = parentId ? subtaskTitle.trim() : newTitle.trim();
@@ -326,6 +343,12 @@ export default function Home() {
                 current={view}
                 onChange={setView}
               />
+              <ViewChip
+                label="Calendar"
+                value="calendar"
+                current={view}
+                onChange={setView}
+              />
             </nav>
 
             <div className="flex items-center gap-2 rounded-full bg-zinc-100 px-3 py-1.5 text-xs text-zinc-500">
@@ -341,7 +364,24 @@ export default function Home() {
         </section>
 
         <section className="mt-2">
-          {visibleTasks.length === 0 ? (
+          {view === "calendar" ? (
+            <CalendarView
+              focusedDate={calendarFocusedDate}
+              setFocusedDate={setCalendarFocusedDate}
+              viewMode={calendarViewMode}
+              setViewMode={setCalendarViewMode}
+              tasksByDate={tasksByDate}
+              formatDueDate={formatDueDate}
+              onToggleComplete={handleToggleComplete}
+              onStartEdit={handleStartEdit}
+              onDelete={handleDelete}
+              editingId={editingId}
+              editingTitle={editingTitle}
+              onSetEditingTitle={setEditingTitle}
+              onCommitEdit={handleCommitEdit}
+              onKeyDownEdit={handleKeyDownEdit}
+            />
+          ) : visibleTasks.length === 0 ? (
             <EmptyState view={view} />
           ) : (
             <TaskList
@@ -578,7 +618,7 @@ function TaskList({
                           onClick={() => onOpenDueEditor(task)}
                           className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-[11px] text-blue-700 hover:bg-blue-200"
                         >
-                          📅 {task.dueAt ? formatDueDate(task.dueAt) : "设置日期"}
+                          📅{task.dueAt ? ` ${formatDueDate(task.dueAt)}` : ""}
                         </button>
                       )}
                       {task.tags.map((tag) => (
@@ -678,6 +718,347 @@ function TaskList({
         );
       })}
     </ul>
+  );
+}
+
+function toDateKey(d: Date): string {
+  return (
+    d.getFullYear() +
+    "-" +
+    String(d.getMonth() + 1).padStart(2, "0") +
+    "-" +
+    String(d.getDate()).padStart(2, "0")
+  );
+}
+
+function getWeekStart(d: Date): Date {
+  const x = new Date(d);
+  const day = x.getDay();
+  x.setDate(x.getDate() - day);
+  return x;
+}
+
+type CalendarViewProps = {
+  focusedDate: Date;
+  setFocusedDate: (d: Date) => void;
+  viewMode: "day" | "week" | "month";
+  setViewMode: (m: "day" | "week" | "month") => void;
+  tasksByDate: Map<string, Task[]>;
+  formatDueDate: (iso: string) => string;
+  onToggleComplete: (id: string) => void;
+  onStartEdit: (task: Task) => void;
+  onDelete: (id: string) => void;
+  editingId: string | null;
+  editingTitle: string;
+  onSetEditingTitle: (title: string) => void;
+  onCommitEdit: () => void;
+  onKeyDownEdit: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+};
+
+function CalendarTaskRow({
+  task,
+  editingId,
+  editingTitle,
+  onSetEditingTitle,
+  onCommitEdit,
+  onKeyDownEdit,
+  onToggleComplete,
+  onStartEdit,
+  onDelete,
+  compact,
+}: {
+  task: Task;
+  editingId: string | null;
+  editingTitle: string;
+  onSetEditingTitle: (t: string) => void;
+  onCommitEdit: () => void;
+  onKeyDownEdit: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  onToggleComplete: (id: string) => void;
+  onStartEdit: (t: Task) => void;
+  onDelete: (id: string) => void;
+  compact?: boolean;
+}) {
+  const isCompact = compact ?? false;
+  return (
+    <div
+      className={`group flex items-center gap-1.5 rounded px-1.5 py-0.5 text-left hover:bg-zinc-100 ${
+        isCompact ? "py-0.5" : "py-1"
+      }`}
+    >
+      <button
+        type="button"
+        onClick={() => onToggleComplete(task.id)}
+        className={`shrink-0 items-center justify-center rounded-full border border-zinc-300 text-[10px] ${
+          isCompact ? "flex h-3.5 w-3.5" : "flex h-4 w-4 text-xs"
+        }`}
+      >
+        {task.completed ? "✓" : ""}
+      </button>
+      <span
+        className={`flex-1 truncate ${
+          task.completed ? "text-zinc-400 line-through" : "text-zinc-800"
+        } ${isCompact ? "text-[10px]" : "text-sm"}`}
+        onDoubleClick={() => onStartEdit(task)}
+        title={task.title}
+      >
+        {editingId === task.id ? (
+          <input
+            autoFocus
+            value={editingTitle}
+            onChange={(e) => onSetEditingTitle(e.target.value)}
+            onBlur={onCommitEdit}
+            onKeyDown={onKeyDownEdit}
+            className="w-full truncate rounded border border-zinc-200 bg-white px-1 text-[10px]"
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          task.title
+        )}
+      </span>
+      <button
+        type="button"
+        onClick={() => onDelete(task.id)}
+        className="hidden shrink-0 rounded p-0.5 text-zinc-400 hover:bg-red-100 hover:text-red-500 group-hover:block"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function CalendarView({
+  focusedDate,
+  setFocusedDate,
+  viewMode,
+  setViewMode,
+  tasksByDate,
+  formatDueDate,
+  onToggleComplete,
+  onStartEdit,
+  onDelete,
+  editingId,
+  editingTitle,
+  onSetEditingTitle,
+  onCommitEdit,
+  onKeyDownEdit,
+}: CalendarViewProps) {
+  const today = new Date();
+  const todayKey = toDateKey(today);
+
+  const prev = () => {
+    const next = new Date(focusedDate);
+    if (viewMode === "day") next.setDate(next.getDate() - 1);
+    else if (viewMode === "week") next.setDate(next.getDate() - 7);
+    else next.setMonth(next.getMonth() - 1);
+    setFocusedDate(next);
+  };
+  const next = () => {
+    const next = new Date(focusedDate);
+    if (viewMode === "day") next.setDate(next.getDate() + 1);
+    else if (viewMode === "week") next.setDate(next.getDate() + 7);
+    else next.setMonth(next.getMonth() + 1);
+    setFocusedDate(next);
+  };
+
+  const title =
+    viewMode === "day"
+      ? `${focusedDate.getFullYear()}年${focusedDate.getMonth() + 1}月${focusedDate.getDate()}日`
+      : viewMode === "week"
+        ? (() => {
+            const start = getWeekStart(new Date(focusedDate));
+            const end = new Date(start);
+            end.setDate(end.getDate() + 6);
+            return `${start.getMonth() + 1}/${start.getDate()} - ${end.getMonth() + 1}/${end.getDate()}`;
+          })()
+        : `${focusedDate.getFullYear()}年${focusedDate.getMonth() + 1}月`;
+
+  return (
+    <div className="rounded-2xl bg-zinc-50 p-3 sm:p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={prev}
+            className="rounded-lg px-2 py-1 text-sm text-zinc-600 hover:bg-zinc-200"
+          >
+            ‹
+          </button>
+          <span className="min-w-[140px] text-center text-sm font-semibold text-zinc-900">
+            {title}
+          </span>
+          <button
+            type="button"
+            onClick={next}
+            className="rounded-lg px-2 py-1 text-sm text-zinc-600 hover:bg-zinc-200"
+          >
+            ›
+          </button>
+        </div>
+        <nav className="inline-flex rounded-lg bg-zinc-200 p-0.5 text-xs font-medium text-zinc-600">
+          {(["day", "week", "month"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => setViewMode(mode)}
+              className={`rounded-md px-2.5 py-1 transition ${
+                viewMode === mode ? "bg-white text-zinc-900 shadow-sm" : "hover:bg-white/60"
+              }`}
+            >
+              {mode === "day" ? "日" : mode === "week" ? "周" : "月"}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {viewMode === "day" && (
+        <div className="rounded-lg border border-zinc-200 bg-white p-3">
+          <div
+            className={`mb-2 text-sm font-semibold ${
+              todayKey === toDateKey(focusedDate) ? "text-blue-600" : "text-zinc-700"
+            }`}
+          >
+            {formatDueDate(`${toDateKey(focusedDate)}T00:00:00.000Z`)}
+          </div>
+          <div className="space-y-0.5">
+            {(tasksByDate.get(toDateKey(focusedDate)) ?? []).map((task) => (
+              <CalendarTaskRow
+                key={task.id}
+                task={task}
+                editingId={editingId}
+                editingTitle={editingTitle}
+                onSetEditingTitle={onSetEditingTitle}
+                onCommitEdit={onCommitEdit}
+                onKeyDownEdit={onKeyDownEdit}
+                onToggleComplete={onToggleComplete}
+                onStartEdit={onStartEdit}
+                onDelete={onDelete}
+                compact={false}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {viewMode === "week" && (
+        <div className="grid grid-cols-7 gap-1 text-center text-xs">
+          {["日", "一", "二", "三", "四", "五", "六"].map((w) => (
+            <div key={w} className="py-1 font-medium text-zinc-500">
+              {w}
+            </div>
+          ))}
+          {Array.from({ length: 7 }, (_, i) => {
+            const d = new Date(getWeekStart(new Date(focusedDate)));
+            d.setDate(d.getDate() + i);
+            const dateKey = toDateKey(d);
+            const dayTasks = tasksByDate.get(dateKey) ?? [];
+            const isToday = dateKey === todayKey;
+            return (
+              <div
+                key={dateKey}
+                className={`min-h-[80px] rounded-lg border p-1.5 ${
+                  isToday ? "border-blue-300 bg-blue-50/50" : "border-zinc-200 bg-white"
+                }`}
+              >
+                <div
+                  className={`mb-1 text-right text-[11px] ${
+                    isToday ? "font-semibold text-blue-600" : "text-zinc-700"
+                  }`}
+                >
+                  {d.getDate()}
+                </div>
+                <div className="space-y-0.5">
+                  {dayTasks.map((task) => (
+                    <CalendarTaskRow
+                      key={task.id}
+                      task={task}
+                      editingId={editingId}
+                      editingTitle={editingTitle}
+                      onSetEditingTitle={onSetEditingTitle}
+                      onCommitEdit={onCommitEdit}
+                      onKeyDownEdit={onKeyDownEdit}
+                      onToggleComplete={onToggleComplete}
+                      onStartEdit={onStartEdit}
+                      onDelete={onDelete}
+                      compact
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {viewMode === "month" && (() => {
+        const year = focusedDate.getFullYear();
+        const month = focusedDate.getMonth();
+        const firstDay = new Date(year, month, 1).getDay();
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        const days: (number | null)[] = [];
+        for (let i = 0; i < firstDay; i++) days.push(null);
+        for (let d = 1; d <= daysInMonth; d++) days.push(d);
+        return (
+          <div className="grid grid-cols-7 gap-0.5 text-center text-xs">
+            {["日", "一", "二", "三", "四", "五", "六"].map((w) => (
+              <div key={w} className="py-1 font-medium text-zinc-500">
+                {w}
+              </div>
+            ))}
+            {days.map((d, i) => {
+              if (d === null) {
+                return <div key={`e-${i}`} className="min-h-[60px]" />;
+              }
+              const dateKey =
+                year +
+                "-" +
+                String(month + 1).padStart(2, "0") +
+                "-" +
+                String(d).padStart(2, "0");
+              const dayTasks = tasksByDate.get(dateKey) ?? [];
+              const isToday = dateKey === todayKey;
+              return (
+                <div
+                  key={dateKey}
+                  className={`min-h-[60px] rounded-lg border p-1 ${
+                    isToday ? "border-blue-300 bg-blue-50/50" : "border-zinc-200 bg-white"
+                  }`}
+                >
+                  <div
+                    className={`mb-1 text-right ${
+                      isToday ? "font-semibold text-blue-600" : "text-zinc-700"
+                    }`}
+                  >
+                    {d}
+                  </div>
+                  <div className="space-y-0.5">
+                    {dayTasks.slice(0, 3).map((task) => (
+                      <CalendarTaskRow
+                        key={task.id}
+                        task={task}
+                        editingId={editingId}
+                        editingTitle={editingTitle}
+                        onSetEditingTitle={onSetEditingTitle}
+                        onCommitEdit={onCommitEdit}
+                        onKeyDownEdit={onKeyDownEdit}
+                        onToggleComplete={onToggleComplete}
+                        onStartEdit={onStartEdit}
+                        onDelete={onDelete}
+                        compact
+                      />
+                    ))}
+                    {dayTasks.length > 3 && (
+                      <div className="text-[10px] text-zinc-400">
+                        +{dayTasks.length - 3}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+    </div>
   );
 }
 

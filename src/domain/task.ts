@@ -13,7 +13,7 @@ export type Task = {
   version: number;
 };
 
-export type TaskView = "inbox" | "today" | "upcoming" | "completed";
+export type TaskView = "inbox" | "today" | "upcoming" | "completed" | "calendar";
 
 export const TASK_STORAGE_VERSION = 1;
 
@@ -114,9 +114,17 @@ export function isVisibleInView(task: Task, view: TaskView, now: Date = new Date
     case "upcoming":
       if (!dueDate) return false;
       return isWithinNextDays(dueDate, now, 7) && !isSameDay(dueDate, now);
+    case "calendar":
+      return false; // 日历视图单独渲染，不通过 visibleTasks
     default:
       return true;
   }
+}
+
+/** 取任务截止日期的本地日期字符串 YYYY-MM-DD，无 dueAt 返回 null */
+export function getTaskDueDateKey(task: Task): string | null {
+  if (!task.dueAt) return null;
+  return task.dueAt.split("T")[0];
 }
 
 export function matchesSearch(task: Task, query: string): boolean {
