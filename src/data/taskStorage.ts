@@ -12,6 +12,14 @@ function isBrowser() {
   return typeof window !== "undefined";
 }
 
+/** 规范化任务：兼容旧数据缺少 parentId */
+function normalizeTask(t: Task): Task {
+  return {
+    ...t,
+    parentId: t.parentId ?? null,
+  };
+}
+
 export function loadTasks(): Task[] {
   if (!isBrowser()) return [];
 
@@ -21,15 +29,16 @@ export function loadTasks(): Task[] {
 
     const parsed = JSON.parse(raw) as StoredPayload | Task[];
 
+    let tasks: Task[];
     if (Array.isArray(parsed)) {
-      return parsed;
+      tasks = parsed;
+    } else if (parsed && typeof parsed === "object" && Array.isArray(parsed.tasks)) {
+      tasks = parsed.tasks;
+    } else {
+      return [];
     }
 
-    if (parsed && typeof parsed === "object" && Array.isArray(parsed.tasks)) {
-      return parsed.tasks;
-    }
-
-    return [];
+    return tasks.map(normalizeTask);
   } catch {
     return [];
   }

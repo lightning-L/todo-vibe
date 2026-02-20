@@ -4,13 +4,16 @@ import * as React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Task, TaskView } from "@/domain/task";
 import {
+  buildTaskTree,
   createTask,
+  getAllDescendantIds,
   isVisibleInView,
   matchesSearch,
   setDueDate,
   softDelete,
   toggleComplete,
   updateTitle,
+  type TaskTreeNode,
 } from "@/domain/task";
 import { loadTasks, saveTasks } from "@/data/taskStorage";
 
@@ -33,6 +36,9 @@ export default function Home() {
   const [editingTitle, setEditingTitle] = useState("");
   const [editingDueId, setEditingDueId] = useState<string | null>(null);
   const [editingDueDate, setEditingDueDate] = useState("");
+  const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
+  const [addingSubtaskFor, setAddingSubtaskFor] = useState<string | null>(null);
+  const [subtaskTitle, setSubtaskTitle] = useState("");
 
   // 初始加载
   useEffect(() => {
@@ -49,20 +55,28 @@ export default function Home() {
     }
   }, [tasks]);
 
-  const visibleTasks = useMemo(
-    () => tasks.filter((t) => isVisibleInView(t, view) && matchesSearch(t, query)),
-    [tasks, view, query],
-  );
+  const visibleTasks = useMemo(() => {
+    const filtered = tasks.filter(
+      (t) => isVisibleInView(t, view) && matchesSearch(t, query),
+    );
+    return buildTaskTree(filtered);
+  }, [tasks, view, query]);
 
-  function handleAddTask() {
-    const title = newTitle.trim();
+  function handleAddTask(parentId?: string | null) {
+    const title = parentId ? subtaskTitle.trim() : newTitle.trim();
     if (!title) return;
     try {
       const dueAt = newDueDate ? parseLocalDate(newDueDate) : null;
-      const task = createTask(title, { dueAt });
+      const task = createTask(title, { dueAt, parentId: parentId ?? null });
       setTasks((prev) => [task, ...prev]);
-      setNewTitle("");
-      setNewDueDate("");
+      if (parentId) {
+        setSubtaskTitle("");
+        setAddingSubtaskFor(null);
+        setExpandedTasks((prev) => new Set(prev).add(parentId));
+      } else {
+        setNewTitle("");
+        setNewDueDate("");
+      }
     } catch {
       // ignore invalid
     }
@@ -72,8 +86,31 @@ export default function Home() {
     setTasks((prev) => prev.map((t) => (t.id === id ? toggleComplete(t) : t)));
   }
 
+  function toggleExpand(id: string) {
+    setExpandedTasks((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
   function handleDelete(id: string) {
-    setTasks((prev) => prev.map((t) => (t.id === id ? softDelete(t) : t)));
+    const descendants = getAllDescendantIds(id, tasks);
+    const totalCount = 1 + descendants.size;
+    const message =
+      totalCount > 1
+        ? `确定删除该任务及其 ${descendants.size} 项子任务吗？共 ${totalCount} 项。`
+        : "确定删除该任务吗？";
+    if (!window.confirm(message)) return;
+
+    const toDelete = new Set([id, ...descendants]);
+    setTasks((prev) =>
+      prev.map((t) => (toDelete.has(t.id) ? softDelete(t) : t)),
+    );
   }
 
   function handleStartEdit(task: Task) {
@@ -229,7 +266,7 @@ export default function Home() {
               />
               <button
                 type="button"
-                onClick={handleAddTask}
+                onClick={() => handleAddTask()}
                 className="rounded-full bg-zinc-900 px-3 py-1 text-xs font-medium text-white shadow-sm transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
                 disabled={!newTitle.trim()}
               >
@@ -287,106 +324,31 @@ export default function Home() {
           {visibleTasks.length === 0 ? (
             <EmptyState view={view} />
           ) : (
-            <ul className="flex flex-col gap-1">
-              {visibleTasks.map((task) => (
-                <li
-                  key={task.id}
-                  className="group flex items-center gap-3 rounded-2xl px-2 py-1.5 hover:bg-zinc-50"
-                >
-                  <button
-                    type="button"
-                    onClick={() => handleToggleComplete(task.id)}
-                    className="flex h-5 w-5 items-center justify-center rounded-full border border-zinc-300 text-xs text-zinc-500 transition group-hover:border-zinc-400"
-                    aria-label={task.completed ? "标记为未完成" : "标记为完成"}
-                  >
-                    {task.completed ? "✓" : ""}
-                  </button>
-
-                  <div
-                    className="flex-1 cursor-text"
-                    onDoubleClick={() => handleStartEdit(task)}
-                  >
-                    {editingId === task.id ? (
-                      <input
-                        autoFocus
-                        value={editingTitle}
-                        onChange={(e) => setEditingTitle(e.target.value)}
-                        onBlur={handleCommitEdit}
-                        onKeyDown={handleKeyDownEdit}
-                        className="w-full rounded-lg border border-zinc-200 bg-white px-2 py-1 text-[15px] outline-none ring-0 focus:border-zinc-300"
-                      />
-                    ) : (
-                      <div className="flex flex-col gap-1">
-                        <p
-                          className={`text-[15px] leading-snug ${
-                            task.completed
-                              ? "text-zinc-400 line-through"
-                              : "text-zinc-900"
-                          }`}
-                        >
-                          {task.title}
-                        </p>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {editingDueId === task.id ? (
-                            <input
-                              type="date"
-                              data-task-id={task.id}
-                              value={editingDueDate}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setEditingDueDate(v);
-                                // 日历选择会一次性给出完整 YYYY-MM-DD，直接保存并关闭
-                                if (/^\d{4}-\d{2}-\d{2}$/.test(v) || v === "") {
-                                  commitDueEditWithValue(task.id, v);
-                                }
-                              }}
-                              onBlur={() => commitDueEdit(task.id)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  commitDueEdit(task.id);
-                                }
-                                if (e.key === "Escape") {
-                                  e.preventDefault();
-                                  setEditingDueId(null);
-                                  setEditingDueDate("");
-                                }
-                              }}
-                              autoFocus
-                              className="rounded-lg border border-zinc-200 bg-white px-2 py-0.5 text-[11px] text-zinc-700 outline-none focus:border-zinc-300"
-                            />
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => openDueEditor(task)}
-                              className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-[11px] text-blue-700 hover:bg-blue-200"
-                            >
-                              📅 {task.dueAt ? formatDueDate(task.dueAt) : "设置日期"}
-                            </button>
-                          )}
-                          {task.tags.map((tag) => (
-                            <span
-                              key={tag}
-                              className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-500"
-                            >
-                              #{tag}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(task.id)}
-                    className="invisible ml-1 rounded-full px-2 py-1 text-xs text-zinc-400 opacity-0 transition hover:bg-zinc-100 hover:text-red-500 group-hover:visible group-hover:opacity-100"
-                  >
-                    删除
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <TaskList
+              nodes={visibleTasks}
+              expandedTasks={expandedTasks}
+              editingId={editingId}
+              editingTitle={editingTitle}
+              editingDueId={editingDueId}
+              editingDueDate={editingDueDate}
+              addingSubtaskFor={addingSubtaskFor}
+              subtaskTitle={subtaskTitle}
+              onToggleComplete={handleToggleComplete}
+              onToggleExpand={toggleExpand}
+              onStartEdit={handleStartEdit}
+              onCommitEdit={handleCommitEdit}
+              onKeyDownEdit={handleKeyDownEdit}
+              onSetEditingTitle={setEditingTitle}
+              onOpenDueEditor={openDueEditor}
+              onCommitDueEdit={commitDueEdit}
+              onCommitDueEditWithValue={commitDueEditWithValue}
+              onSetEditingDueDate={setEditingDueDate}
+              onDelete={handleDelete}
+              onSetAddingSubtaskFor={setAddingSubtaskFor}
+              onSetSubtaskTitle={setSubtaskTitle}
+              onAddSubtask={handleAddTask}
+              formatDueDate={formatDueDate}
+            />
           )}
         </section>
       </main>
@@ -441,6 +403,261 @@ function isSameDay(a: Date, b: Date): boolean {
     a.getFullYear() === b.getFullYear() &&
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate()
+  );
+}
+
+type TaskListProps = {
+  nodes: TaskTreeNode[];
+  expandedTasks: Set<string>;
+  editingId: string | null;
+  editingTitle: string;
+  editingDueId: string | null;
+  editingDueDate: string;
+  addingSubtaskFor: string | null;
+  subtaskTitle: string;
+  onToggleComplete: (id: string) => void;
+  onToggleExpand: (id: string) => void;
+  onStartEdit: (task: Task) => void;
+  onCommitEdit: () => void;
+  onKeyDownEdit: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  onSetEditingTitle: (title: string) => void;
+  onOpenDueEditor: (task: Task) => void;
+  onCommitDueEdit: (taskId: string) => void;
+  onCommitDueEditWithValue: (taskId: string, value: string) => void;
+  onSetEditingDueDate: (value: string) => void;
+  onDelete: (id: string) => void;
+  onSetAddingSubtaskFor: (id: string | null) => void;
+  onSetSubtaskTitle: (title: string) => void;
+  onAddSubtask: (parentId: string) => void;
+  formatDueDate: (isoString: string) => string;
+};
+
+function TaskList({
+  nodes,
+  expandedTasks,
+  editingId,
+  editingTitle,
+  editingDueId,
+  editingDueDate,
+  addingSubtaskFor,
+  subtaskTitle,
+  onToggleComplete,
+  onToggleExpand,
+  onStartEdit,
+  onCommitEdit,
+  onKeyDownEdit,
+  onSetEditingTitle,
+  onOpenDueEditor,
+  onCommitDueEdit,
+  onCommitDueEditWithValue,
+  onSetEditingDueDate,
+  onDelete,
+  onSetAddingSubtaskFor,
+  onSetSubtaskTitle,
+  onAddSubtask,
+  formatDueDate,
+}: TaskListProps) {
+  return (
+    <ul className="flex flex-col gap-1">
+      {nodes.map((node) => {
+        const task = node.task;
+        const hasChildren = node.children.length > 0;
+        const isExpanded = expandedTasks.has(task.id);
+        const isParentExpanded = node.depth === 0 || expandedTasks.has(task.parentId!);
+
+        // 如果父任务折叠，不显示子任务
+        if (node.depth > 0 && !isParentExpanded) {
+          return null;
+        }
+
+        return (
+          <React.Fragment key={task.id}>
+            <li
+              className="group flex items-center gap-2 rounded-2xl px-2 py-1.5 hover:bg-zinc-50"
+              style={
+                node.depth > 0
+                  ? { paddingLeft: `${8 + node.depth * 24}px` }
+                  : undefined
+              }
+            >
+              {hasChildren && (
+                <button
+                  type="button"
+                  onClick={() => onToggleExpand(task.id)}
+                  className="flex h-4 w-4 items-center justify-center text-xs text-zinc-400 hover:text-zinc-600"
+                  aria-label={isExpanded ? "折叠" : "展开"}
+                >
+                  {isExpanded ? "▼" : "▶"}
+                </button>
+              )}
+              {!hasChildren && <div className="w-4" />}
+
+              <button
+                type="button"
+                onClick={() => onToggleComplete(task.id)}
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-zinc-300 text-xs text-zinc-500 transition group-hover:border-zinc-400"
+                aria-label={task.completed ? "标记为未完成" : "标记为完成"}
+              >
+                {task.completed ? "✓" : ""}
+              </button>
+
+              <div
+                className="flex-1 cursor-text"
+                onDoubleClick={() => onStartEdit(task)}
+              >
+                {editingId === task.id ? (
+                  <input
+                    autoFocus
+                    value={editingTitle}
+                    onChange={(e) => onSetEditingTitle(e.target.value)}
+                    onBlur={onCommitEdit}
+                    onKeyDown={onKeyDownEdit}
+                    className="w-full rounded-lg border border-zinc-200 bg-white px-2 py-1 text-[15px] outline-none ring-0 focus:border-zinc-300"
+                  />
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    <p
+                      className={`text-[15px] leading-snug ${
+                        task.completed
+                          ? "text-zinc-400 line-through"
+                          : "text-zinc-900"
+                      }`}
+                    >
+                      {task.title}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {editingDueId === task.id ? (
+                        <input
+                          type="date"
+                          data-task-id={task.id}
+                          value={editingDueDate}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            onSetEditingDueDate(v);
+                            if (/^\d{4}-\d{2}-\d{2}$/.test(v) || v === "") {
+                              onCommitDueEditWithValue(task.id, v);
+                            }
+                          }}
+                          onBlur={() => onCommitDueEdit(task.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              onCommitDueEdit(task.id);
+                            }
+                            if (e.key === "Escape") {
+                              e.preventDefault();
+                              onSetEditingDueDate("");
+                            }
+                          }}
+                          autoFocus
+                          className="rounded-lg border border-zinc-200 bg-white px-2 py-0.5 text-[11px] text-zinc-700 outline-none focus:border-zinc-300"
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => onOpenDueEditor(task)}
+                          className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-[11px] text-blue-700 hover:bg-blue-200"
+                        >
+                          📅 {task.dueAt ? formatDueDate(task.dueAt) : "设置日期"}
+                        </button>
+                      )}
+                      {task.tags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-500"
+                        >
+                          #{tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => onSetAddingSubtaskFor(task.id)}
+                className="invisible ml-1 flex h-7 w-7 items-center justify-center rounded-full text-zinc-400 opacity-0 transition hover:bg-zinc-100 hover:text-blue-500 group-hover:visible group-hover:opacity-100"
+                title="添加子任务"
+              >
+                +
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onDelete(task.id)}
+                className="invisible ml-1 rounded-full px-2 py-1 text-xs text-zinc-400 opacity-0 transition hover:bg-zinc-100 hover:text-red-500 group-hover:visible group-hover:opacity-100"
+              >
+                删除
+              </button>
+            </li>
+
+            {addingSubtaskFor === task.id && (
+              <li
+                className="flex items-center gap-2 rounded-2xl bg-zinc-50 px-2 py-1.5"
+                style={{ paddingLeft: `${8 + (node.depth + 1) * 24}px` }}
+              >
+                <div className="w-4" />
+                <div className="w-5" />
+                <input
+                  autoFocus
+                  value={subtaskTitle}
+                  onChange={(e) => onSetSubtaskTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      onAddSubtask(task.id);
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      onSetAddingSubtaskFor(null);
+                      onSetSubtaskTitle("");
+                    }
+                  }}
+                  onBlur={() => {
+                    if (subtaskTitle.trim()) {
+                      onAddSubtask(task.id);
+                    } else {
+                      onSetAddingSubtaskFor(null);
+                    }
+                  }}
+                  placeholder="输入子任务标题..."
+                  className="flex-1 rounded-lg border border-zinc-200 bg-white px-2 py-1 text-[15px] outline-none ring-0 focus:border-zinc-300"
+                />
+              </li>
+            )}
+
+            {hasChildren && isExpanded && (
+              <TaskList
+                nodes={node.children}
+                expandedTasks={expandedTasks}
+                editingId={editingId}
+                editingTitle={editingTitle}
+                editingDueId={editingDueId}
+                editingDueDate={editingDueDate}
+                addingSubtaskFor={addingSubtaskFor}
+                subtaskTitle={subtaskTitle}
+                onToggleComplete={onToggleComplete}
+                onToggleExpand={onToggleExpand}
+                onStartEdit={onStartEdit}
+                onCommitEdit={onCommitEdit}
+                onKeyDownEdit={onKeyDownEdit}
+                onSetEditingTitle={onSetEditingTitle}
+                onOpenDueEditor={onOpenDueEditor}
+                onCommitDueEdit={onCommitDueEdit}
+                onCommitDueEditWithValue={onCommitDueEditWithValue}
+                onSetEditingDueDate={onSetEditingDueDate}
+                onDelete={onDelete}
+                onSetAddingSubtaskFor={onSetAddingSubtaskFor}
+                onSetSubtaskTitle={onSetSubtaskTitle}
+                onAddSubtask={onAddSubtask}
+                formatDueDate={formatDueDate}
+              />
+            )}
+          </React.Fragment>
+        );
+      })}
+    </ul>
   );
 }
 

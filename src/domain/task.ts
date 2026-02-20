@@ -5,6 +5,7 @@ export type Task = {
   title: string;
   completed: boolean;
   dueAt: string | null; // ISO string or null
+  parentId: TaskId | null; // 父任务 ID，null 表示顶级任务
   tags: string[];
   createdAt: string;
   updatedAt: string;
@@ -18,7 +19,7 @@ export const TASK_STORAGE_VERSION = 1;
 
 export function createTask(
   title: string,
-  options?: { dueAt?: Date | null; now?: Date },
+  options?: { dueAt?: Date | null; parentId?: TaskId | null; now?: Date },
 ): Task {
   const trimmed = title.trim();
   if (!trimmed) {
@@ -36,6 +37,7 @@ export function createTask(
     title: cleanTitle || trimmed,
     completed: false,
     dueAt: options?.dueAt ? options.dueAt.toISOString() : null,
+    parentId: options?.parentId ?? null,
     tags,
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -90,7 +92,8 @@ export function isVisibleInView(task: Task, view: TaskView, now: Date = new Date
 
   switch (view) {
     case "inbox":
-      return !task.completed;
+      // 无截止日期的任务（含已完成），完成后保留在列表中以删除线展示
+      return !dueDate;
     case "completed":
       return task.completed;
     case "today":
@@ -112,6 +115,95 @@ export function matchesSearch(task: Task, query: string): boolean {
   if (task.tags.some((tag) => tag.toLowerCase().includes(q))) return true;
 
   return false;
+}
+
+/** 任务树节点，包含任务和子任务 */
+export type TaskTreeNode = {
+  task: Task;
+  children: TaskTreeNode[];
+  depth: number;
+};
+
+/** 构建任务树结构 */
+export function buildTaskTree(tasks: Task[]): TaskTreeNode[] {
+  const taskMap = new Map<TaskId, TaskTreeNode>();
+  const roots: TaskTreeNode[] = [];
+
+  // 第一遍：创建所有节点
+  for (const task of tasks) {
+    if (task.deletedAt) continue;
+    taskMap.set(task.id, {
+      task,
+      children: [],
+      depth: 0,
+    });
+  }
+
+  // 第二遍：只建立父子关系，不在这里算 depth（避免子任务先于父任务被遍历时 depth 错误）
+  for (const task of tasks) {
+    if (task.deletedAt) continue;
+    const node = taskMap.get(task.id)!;
+    if (task.parentId && taskMap.has(task.parentId)) {
+      const parent = taskMap.get(task.parentId)!;
+      parent.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  // 第三遍：从根开始遍历，正确计算每层 depth
+  function assignDepth(nodes: TaskTreeNode[], depth: number): void {
+    for (const node of nodes) {
+      node.depth = depth;
+      assignDepth(node.children, depth + 1);
+    }
+  }
+  assignDepth(roots, 0);
+
+  // 按创建时间排序：先添加的在上、后添加的在下
+  function sortNodes(nodes: TaskTreeNode[]): TaskTreeNode[] {
+    return nodes
+      .sort((a, b) => a.task.createdAt.localeCompare(b.task.createdAt))
+      .map((node) => ({
+        ...node,
+        children: sortNodes(node.children),
+      }));
+  }
+
+  return sortNodes(roots);
+}
+
+/** 扁平化任务树（深度优先） */
+export function flattenTaskTree(nodes: TaskTreeNode[]): TaskTreeNode[] {
+  const result: TaskTreeNode[] = [];
+  function traverse(node: TaskTreeNode) {
+    result.push(node);
+    for (const child of node.children) {
+      traverse(child);
+    }
+  }
+  for (const node of nodes) {
+    traverse(node);
+  }
+  return result;
+}
+
+/** 获取任务的所有子任务 ID（递归） */
+export function getAllDescendantIds(
+  taskId: TaskId,
+  tasks: Task[],
+): Set<TaskId> {
+  const result = new Set<TaskId>();
+  function collect(id: TaskId) {
+    for (const task of tasks) {
+      if (task.parentId === id && !task.deletedAt) {
+        result.add(task.id);
+        collect(task.id);
+      }
+    }
+  }
+  collect(taskId);
+  return result;
 }
 
 function isSameDay(a: Date, b: Date): boolean {
