@@ -97,14 +97,27 @@ export function setDueDate(task: Task, dueAt: Date | null, now: Date = new Date(
   };
 }
 
-export function isVisibleInView(task: Task, view: TaskView, now: Date = new Date()): boolean {
+/** 获取任务的「有效」截止日期：自身有则用自身的，否则递归继承父任务 */
+export function getEffectiveDueDate(task: Task, tasks: Task[]): string | null {
+  if (task.dueAt) return task.dueAt;
+  if (!task.parentId) return null;
+  const parent = tasks.find((t) => t.id === task.parentId && !t.deletedAt);
+  return parent ? getEffectiveDueDate(parent, tasks) : null;
+}
+
+export function isVisibleInView(
+  task: Task,
+  view: TaskView,
+  now: Date = new Date(),
+  tasks?: Task[],
+): boolean {
   if (task.deletedAt) return false;
 
-  const dueDate = task.dueAt ? new Date(task.dueAt) : null;
+  const effectiveDue = tasks ? getEffectiveDueDate(task, tasks) : task.dueAt;
+  const dueDate = effectiveDue ? new Date(effectiveDue) : null;
 
   switch (view) {
     case "inbox":
-      // 无截止日期的任务（含已完成），完成后保留在列表中以删除线展示
       return !dueDate;
     case "completed":
       return task.completed;
@@ -115,16 +128,17 @@ export function isVisibleInView(task: Task, view: TaskView, now: Date = new Date
       if (!dueDate) return false;
       return isWithinNextDays(dueDate, now, 7) && !isSameDay(dueDate, now);
     case "calendar":
-      return false; // 日历视图单独渲染，不通过 visibleTasks
+      return false;
     default:
       return true;
   }
 }
 
-/** 取任务截止日期的本地日期字符串 YYYY-MM-DD，无 dueAt 返回 null */
-export function getTaskDueDateKey(task: Task): string | null {
-  if (!task.dueAt) return null;
-  return task.dueAt.split("T")[0];
+/** 取任务截止日期的本地日期字符串 YYYY-MM-DD；可传 tasks 则用有效截止日期（含继承） */
+export function getTaskDueDateKey(task: Task, tasks?: Task[]): string | null {
+  const iso = tasks ? getEffectiveDueDate(task, tasks) : task.dueAt;
+  if (!iso) return null;
+  return iso.split("T")[0];
 }
 
 export function matchesSearch(task: Task, query: string): boolean {
@@ -239,6 +253,14 @@ export function getAncestorIds(taskId: TaskId, tasks: Task[]): TaskId[] {
     currentId = parent.parentId;
   }
   return result;
+}
+
+/** 获取任务的父级层级标题（从根到直接父任务），用于展示「A | B」备注 */
+export function getAncestorTitles(task: Task, tasks: Task[]): string[] {
+  const ids = getAncestorIds(task.id, tasks).reverse();
+  return ids
+    .map((id) => tasks.find((t) => t.id === id && !t.deletedAt)?.title)
+    .filter((t): t is string => t != null);
 }
 
 function isSameDay(a: Date, b: Date): boolean {

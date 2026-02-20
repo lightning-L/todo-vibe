@@ -8,6 +8,8 @@ import {
   createTask,
   getAllDescendantIds,
   getAncestorIds,
+  getAncestorTitles,
+  getEffectiveDueDate,
   getTaskDueDateKey,
   isVisibleInView,
   matchesSearch,
@@ -62,18 +64,21 @@ export default function Home() {
 
   const visibleTasks = useMemo(() => {
     const filtered = tasks.filter(
-      (t) => isVisibleInView(t, view) && matchesSearch(t, query),
+      (t) => isVisibleInView(t, view, new Date(), tasks) && matchesSearch(t, query),
     );
     return buildTaskTree(filtered);
   }, [tasks, view, query]);
 
-  /** 日历视图：有 dueAt 且通过搜索过滤的任务，按日期 YYYY-MM-DD 分组 */
+  /** 日历视图：按有效截止日期分组，仅显示叶子任务（无子任务） */
   const tasksByDate = useMemo(() => {
     const map = new Map<string, Task[]>();
+    const hasChildren = (task: Task) =>
+      tasks.some((other) => !other.deletedAt && other.parentId === task.id);
     for (const t of tasks) {
       if (t.deletedAt) continue;
       if (!matchesSearch(t, query)) continue;
-      const key = getTaskDueDateKey(t);
+      if (hasChildren(t)) continue;
+      const key = getTaskDueDateKey(t, tasks);
       if (!key) continue;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(t);
@@ -192,7 +197,8 @@ export default function Home() {
 
   function openDueEditor(task: Task) {
     setEditingDueId(task.id);
-    setEditingDueDate(task.dueAt ? task.dueAt.split("T")[0] : "");
+    const effective = task.dueAt || getEffectiveDueDate(task, tasks);
+    setEditingDueDate(effective ? effective.split("T")[0] : "");
     // 延迟一帧，确保 input 已渲染，然后尝试打开日历选择器
     setTimeout(() => {
       const input = document.querySelector(
@@ -366,6 +372,7 @@ export default function Home() {
         <section className="mt-2">
           {view === "calendar" ? (
             <CalendarView
+              tasks={tasks}
               focusedDate={calendarFocusedDate}
               setFocusedDate={setCalendarFocusedDate}
               viewMode={calendarViewMode}
@@ -385,6 +392,7 @@ export default function Home() {
             <EmptyState view={view} />
           ) : (
             <TaskList
+              tasks={tasks}
               nodes={visibleTasks}
               expandedTasks={expandedTasks}
               editingId={editingId}
@@ -467,6 +475,7 @@ function isSameDay(a: Date, b: Date): boolean {
 }
 
 type TaskListProps = {
+  tasks: Task[];
   nodes: TaskTreeNode[];
   expandedTasks: Set<string>;
   editingId: string | null;
@@ -493,6 +502,7 @@ type TaskListProps = {
 };
 
 function TaskList({
+  tasks,
   nodes,
   expandedTasks,
   editingId,
@@ -585,6 +595,11 @@ function TaskList({
                     >
                       {task.title}
                     </p>
+                    {getAncestorTitles(task, tasks).length > 0 && (
+                      <p className="text-[11px] text-zinc-400">
+                        {getAncestorTitles(task, tasks).join(" | ")}
+                      </p>
+                    )}
                     <div className="flex flex-wrap items-center gap-1.5">
                       {editingDueId === task.id ? (
                         <input
@@ -618,7 +633,9 @@ function TaskList({
                           onClick={() => onOpenDueEditor(task)}
                           className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-[11px] text-blue-700 hover:bg-blue-200"
                         >
-                          📅{task.dueAt ? ` ${formatDueDate(task.dueAt)}` : ""}
+                          📅{getEffectiveDueDate(task, tasks)
+                              ? ` ${formatDueDate(getEffectiveDueDate(task, tasks)!)}`
+                              : ""}
                         </button>
                       )}
                       {task.tags.map((tag) => (
@@ -689,6 +706,7 @@ function TaskList({
 
             {hasChildren && isExpanded && (
               <TaskList
+                tasks={tasks}
                 nodes={node.children}
                 expandedTasks={expandedTasks}
                 editingId={editingId}
@@ -739,6 +757,7 @@ function getWeekStart(d: Date): Date {
 }
 
 type CalendarViewProps = {
+  tasks: Task[];
   focusedDate: Date;
   setFocusedDate: (d: Date) => void;
   viewMode: "day" | "week" | "month";
@@ -757,6 +776,7 @@ type CalendarViewProps = {
 
 function CalendarTaskRow({
   task,
+  ancestorTitles,
   editingId,
   editingTitle,
   onSetEditingTitle,
@@ -768,6 +788,7 @@ function CalendarTaskRow({
   compact,
 }: {
   task: Task;
+  ancestorTitles?: string[];
   editingId: string | null;
   editingTitle: string;
   onSetEditingTitle: (t: string) => void;
@@ -779,42 +800,53 @@ function CalendarTaskRow({
   compact?: boolean;
 }) {
   const isCompact = compact ?? false;
+  const showAncestors = ancestorTitles && ancestorTitles.length > 0;
   return (
     <div
-      className={`group flex items-center gap-1.5 rounded px-1.5 py-0.5 text-left hover:bg-zinc-100 ${
+      className={`group flex items-start gap-1.5 rounded px-1.5 py-0.5 text-left hover:bg-zinc-100 ${
         isCompact ? "py-0.5" : "py-1"
       }`}
     >
       <button
         type="button"
         onClick={() => onToggleComplete(task.id)}
-        className={`shrink-0 items-center justify-center rounded-full border border-zinc-300 text-[10px] ${
+        className={`mt-0.5 shrink-0 items-center justify-center rounded-full border border-zinc-300 text-[10px] ${
           isCompact ? "flex h-3.5 w-3.5" : "flex h-4 w-4 text-xs"
         }`}
       >
         {task.completed ? "✓" : ""}
       </button>
-      <span
-        className={`flex-1 truncate ${
-          task.completed ? "text-zinc-400 line-through" : "text-zinc-800"
-        } ${isCompact ? "text-[10px]" : "text-sm"}`}
-        onDoubleClick={() => onStartEdit(task)}
-        title={task.title}
-      >
-        {editingId === task.id ? (
-          <input
-            autoFocus
-            value={editingTitle}
-            onChange={(e) => onSetEditingTitle(e.target.value)}
-            onBlur={onCommitEdit}
-            onKeyDown={onKeyDownEdit}
-            className="w-full truncate rounded border border-zinc-200 bg-white px-1 text-[10px]"
-            onClick={(e) => e.stopPropagation()}
-          />
-        ) : (
-          task.title
+      <div className="min-w-0 flex-1">
+        <span
+          className={`block truncate ${
+            task.completed ? "text-zinc-400 line-through" : "text-zinc-800"
+          } ${isCompact ? "text-[10px]" : "text-sm"}`}
+          onDoubleClick={() => onStartEdit(task)}
+          title={task.title}
+        >
+          {editingId === task.id ? (
+            <input
+              autoFocus
+              value={editingTitle}
+              onChange={(e) => onSetEditingTitle(e.target.value)}
+              onBlur={onCommitEdit}
+              onKeyDown={onKeyDownEdit}
+              className="w-full truncate rounded border border-zinc-200 bg-white px-1 text-[10px]"
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            task.title
+          )}
+        </span>
+        {showAncestors && (
+          <span
+            className={`block truncate text-zinc-400 ${isCompact ? "text-[9px]" : "text-[10px]"}`}
+            title={ancestorTitles.join(" | ")}
+          >
+            {ancestorTitles.join(" | ")}
+          </span>
         )}
-      </span>
+      </div>
       <button
         type="button"
         onClick={() => onDelete(task.id)}
@@ -827,6 +859,7 @@ function CalendarTaskRow({
 }
 
 function CalendarView({
+  tasks,
   focusedDate,
   setFocusedDate,
   viewMode,
@@ -924,6 +957,7 @@ function CalendarView({
               <CalendarTaskRow
                 key={task.id}
                 task={task}
+                ancestorTitles={getAncestorTitles(task, tasks)}
                 editingId={editingId}
                 editingTitle={editingTitle}
                 onSetEditingTitle={onSetEditingTitle}
@@ -971,6 +1005,7 @@ function CalendarView({
                     <CalendarTaskRow
                       key={task.id}
                       task={task}
+                      ancestorTitles={getAncestorTitles(task, tasks)}
                       editingId={editingId}
                       editingTitle={editingTitle}
                       onSetEditingTitle={onSetEditingTitle}
@@ -1035,6 +1070,7 @@ function CalendarView({
                       <CalendarTaskRow
                         key={task.id}
                         task={task}
+                        ancestorTitles={getAncestorTitles(task, tasks)}
                         editingId={editingId}
                         editingTitle={editingTitle}
                         onSetEditingTitle={onSetEditingTitle}
