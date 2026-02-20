@@ -44,6 +44,7 @@ export default function Home() {
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
   const [addingSubtaskFor, setAddingSubtaskFor] = useState<string | null>(null);
   const [subtaskTitle, setSubtaskTitle] = useState("");
+  const [mobileActionsTaskId, setMobileActionsTaskId] = useState<string | null>(null);
   const [calendarFocusedDate, setCalendarFocusedDate] = useState(() => new Date());
   const [calendarViewMode, setCalendarViewMode] = useState<"day" | "week" | "month">("month");
 
@@ -153,6 +154,7 @@ export default function Home() {
     setTasks((prev) =>
       prev.map((t) => (toDelete.has(t.id) ? softDelete(t) : t)),
     );
+    setMobileActionsTaskId((prev) => (toDelete.has(prev ?? "") ? null : prev));
   }
 
   function handleStartEdit(task: Task) {
@@ -401,6 +403,8 @@ export default function Home() {
               editingDueDate={editingDueDate}
               addingSubtaskFor={addingSubtaskFor}
               subtaskTitle={subtaskTitle}
+              mobileActionsTaskId={mobileActionsTaskId}
+              onSetMobileActionsTaskId={setMobileActionsTaskId}
               onToggleComplete={handleToggleComplete}
               onToggleExpand={toggleExpand}
               onStartEdit={handleStartEdit}
@@ -484,6 +488,8 @@ type TaskListProps = {
   editingDueDate: string;
   addingSubtaskFor: string | null;
   subtaskTitle: string;
+  mobileActionsTaskId: string | null;
+  onSetMobileActionsTaskId: (id: string | null) => void;
   onToggleComplete: (id: string) => void;
   onToggleExpand: (id: string) => void;
   onStartEdit: (task: Task) => void;
@@ -511,6 +517,8 @@ function TaskList({
   editingDueDate,
   addingSubtaskFor,
   subtaskTitle,
+  mobileActionsTaskId,
+  onSetMobileActionsTaskId,
   onToggleComplete,
   onToggleExpand,
   onStartEdit,
@@ -572,8 +580,23 @@ function TaskList({
               </button>
 
               <div
-                className="flex-1 cursor-text"
+                className="flex-1 cursor-text min-w-0"
                 onDoubleClick={() => onStartEdit(task)}
+                onClick={(e) => {
+                  if (editingId === task.id) return;
+                  e.stopPropagation();
+                  onSetMobileActionsTaskId(mobileActionsTaskId === task.id ? null : task.id);
+                }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (editingId === task.id) return;
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onSetMobileActionsTaskId(mobileActionsTaskId === task.id ? null : task.id);
+                  }
+                }}
+                aria-label="点击显示添加子任务与删除"
               >
                 {editingId === task.id ? (
                   <input
@@ -654,7 +677,9 @@ function TaskList({
               <button
                 type="button"
                 onClick={() => onSetAddingSubtaskFor(task.id)}
-                className="invisible ml-1 flex h-7 w-7 items-center justify-center rounded-full text-zinc-400 opacity-0 transition hover:bg-zinc-100 hover:text-blue-500 group-hover:visible group-hover:opacity-100"
+                className={`ml-1 flex h-7 w-7 items-center justify-center rounded-full text-zinc-400 transition hover:bg-zinc-100 hover:text-blue-500 ${
+                  mobileActionsTaskId === task.id ? "visible opacity-100" : "invisible opacity-0 group-hover:visible group-hover:opacity-100"
+                }`}
                 title="添加子任务"
               >
                 +
@@ -663,7 +688,9 @@ function TaskList({
               <button
                 type="button"
                 onClick={() => onDelete(task.id)}
-                className="invisible ml-1 rounded-full px-2 py-1 text-xs text-zinc-400 opacity-0 transition hover:bg-zinc-100 hover:text-red-500 group-hover:visible group-hover:opacity-100"
+                className={`ml-1 rounded-full px-2 py-1 text-xs text-zinc-400 transition hover:bg-zinc-100 hover:text-red-500 ${
+                  mobileActionsTaskId === task.id ? "visible opacity-100" : "invisible opacity-0 group-hover:visible group-hover:opacity-100"
+                }`}
               >
                 删除
               </button>
@@ -715,6 +742,8 @@ function TaskList({
                 editingDueDate={editingDueDate}
                 addingSubtaskFor={addingSubtaskFor}
                 subtaskTitle={subtaskTitle}
+                mobileActionsTaskId={mobileActionsTaskId}
+                onSetMobileActionsTaskId={onSetMobileActionsTaskId}
                 onToggleComplete={onToggleComplete}
                 onToggleExpand={onToggleExpand}
                 onStartEdit={onStartEdit}
