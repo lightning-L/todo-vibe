@@ -629,13 +629,7 @@ function TaskList({
                           type="date"
                           data-task-id={task.id}
                           value={editingDueDate}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            onSetEditingDueDate(v);
-                            if (/^\d{4}-\d{2}-\d{2}$/.test(v) || v === "") {
-                              onCommitDueEditWithValue(task.id, v);
-                            }
-                          }}
+                          onChange={(e) => onSetEditingDueDate(e.target.value)}
                           onBlur={() => onCommitDueEdit(task.id)}
                           onKeyDown={(e) => {
                             if (e.key === "Enter") {
